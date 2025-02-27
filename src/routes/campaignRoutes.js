@@ -19,40 +19,45 @@ async function campaignRoutes(fastify, options) {
         acc[isIdentical ? 'identicalName' : 'nonIdenticalName'].push(history);
         return acc;
       }, { identicalName: [], nonIdenticalName: [] });
-      
-      console.log("Identical names:", mappingCampaignHistory.identicalName);
-      console.log("Non-identical names:", mappingCampaignHistory.nonIdenticalName?.length);
 
+      console.log("Identical names:", mappingCampaignHistory.identicalName.length);
+      console.log("Non-identical names:", mappingCampaignHistory.nonIdenticalName.length);
 
+      console.time("string-similarity Approach");
 
+      const similarityThreshold = 0.50;
 
+      const stringSimilarityMatched = mappingCampaignHistory.nonIdenticalName
+        .map((history) => {
+          let bestMatch = { similarity: 0 };
 
-      const stringSimilarityMatch = mappingCampaignHistory.nonIdenticalName.map((history) => {
-        let bestMatch = null;
+          for (const campaign of baseCampaigns) {
+            const similarity = stringSimilarity.compareTwoStrings(campaign.name, history.name);
 
-        baseCampaigns.forEach((campaign) => {
-          const similarity = stringSimilarity.compareTwoStrings(campaign.name, history.name);
+            if (similarity < 0.2) continue;
 
-          if (similarity >= 0.50 && (!bestMatch || similarity > bestMatch.similarity)) {
-            bestMatch = {
-              history: history.name,
-              campaign: campaign.name,
-              similarity: (similarity * 100).toFixed(2)
-            };
+            if (similarity > bestMatch.similarity) {
+              bestMatch = { history: history.name, campaign: campaign.name, similarity };
+            }
           }
-        });
 
-        return bestMatch;
-      }).filter(Boolean); 
+          return bestMatch.similarity >= similarityThreshold
+            ? { ...bestMatch, similarity: (bestMatch.similarity * 100).toFixed(2) }
+            : null;
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.similarity - a.similarity);
 
-      const stringSimilarityMatched = stringSimilarityMatch.sort((a, b) => a.similarity - b.similarity);
-
-      console.log("stringSimilarityMatched:", {stringSimilarityMatched}, stringSimilarityMatched?.length);
+      console.timeEnd("string-similarity Approach");
 
 
+      console.log("Best matches (sorted by similarity):", stringSimilarityMatched?.length);
+
+
+      console.time("fuse.js Approach");
 
       const fuse = new Fuse(baseCampaigns, {
-        keys: ['name'], 
+        keys: ['name'],
         threshold: 0.50,
         includeScore: true
       });
@@ -64,17 +69,20 @@ async function campaignRoutes(fastify, options) {
           return {
             history: history.name,
             campaign: bestMatch.item.name,
-            similarity: (100 - (bestMatch.score * 100)).toFixed(2) 
+            similarity: (100 - (bestMatch.score * 100)).toFixed(2)
           };
         }
 
-        return null; 
-      }).filter(Boolean); 
+        return null;
+      }).filter(Boolean);
 
       const sortedResults = results.sort((a, b) => a.similarity - b.similarity);
 
-      console.log("fuse:", { sortedResults }, sortedResults?.length);
-      return sortedResults;
+      console.timeEnd("fuse.js Approach");
+
+
+      console.log("fuse:", sortedResults?.length);
+      return { sortedResults, stringSimilarityMatched };
     } catch (error) {
       request.log.error(error);
       return reply.status(500).send({ message: "Database error" });
